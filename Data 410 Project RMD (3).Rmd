@@ -1,0 +1,181 @@
+---
+title: "DATA410_Project"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Input and loading libraries
+
+```{r}
+options(scipen=5)
+
+#need to install packages that are missing 
+library(ggpubr)
+library(SmartEDA)
+library(dplyr)
+library(MASS)
+library(glmnet)
+library(leaps)
+library(gridExtra)
+library(lsr)
+library(lmtest)
+
+df <- read.csv("DATA410_Flight_Price_Data.csv") #need to setwd to the location of this file
+```
+
+## Data Subsetting (Used for EDA)
+
+```{r}
+df1 <- df[which(df$class == "Business"), ]
+df1 = subset(df1, select = -c(class))
+df2 <- df[which(df$class == "Economy"), ]
+df2 = subset(df2, select = -c(class))
+```
+
+## Exploratory Data Analysis (EDA)
+
+```{r}
+ExpData(df, type=1)
+str(df)  # structure of the data set
+summary(df) #produce summary statistics of the data 
+
+ExpCTable(df,Target=NULL,margin=1,clim=10,nlim=3,round=2,bin=NULL,per=T) #descriptive statistics with frequency for all categorical variables 
+# From descriptive statistics it can be seen that the frequency of occurrence for number of stops = two or more is 0.46 percent which is a very small percentage. Therefore we re-coded the column of number of stops to a binary variable with 0 = 0 number of stops and 1 = 1 or more stops.
+df <- df %>% mutate(stops=recode(stops, `one`= 1, `two_or_more`= 1,`zero`= 0))
+# Similar reasoning for departure time, it can be seen that the frequency of occurrence for departure time = Late Night is 0.79 percent which is a very small percentage. So we re-coded departure time such that both late night and night are combined into one category Night
+df$departure_time[df$departure_time == 'Late_Night'] <- 'Night'
+#Similarly for arrival time, frequency of occurrences for arrival time = Early Morning is 2.93	and arrival_time for Late_Night is 5.03	so we combine Early Morning to Morning and Late Night to Night 
+df$arrival_time[df$arrival_time == 'Late_Night'] <- 'Night'
+df$arrival_time[df$arrival_time == 'Early_Morning'] <- 'Morning'
+
+hist(df$price,main = "Histogram of Price", xlab = "Price in Indian Rupees") #histogram for distribution of response variable Y = Price
+
+ggboxplot(df, x = "class", y = "price",color = "class", palette = c("#eb8060","#d9b1f0")) #Price distribution for economy v/s business class 
+
+ggboxplot(df, x = "airline", y = "price",color = "airline", palette =c("#00AFBB", "#E7B800", "#FC4E07", "#eb8060","#d9b1f0", "#b9e38d")) #Price Dsitribution for various Airlines
+
+#Boxplot for Price distribution for number of stops based on class
+boxplot(price~stops*class, data = df, col = c("#00AFBB", "#E7B800"),las = 2, ylim = c(0,70000), ylab = "Price", main = "Price VS Stops, Stratified by Class", axes = F) 
+box()
+axis(1, at = c(1.5,3.5), labels = c("Business Class", "Economy Class"))
+legend(x = 3.5, y = 68000, legend = c("0 stops", "1 or more stops"), col = c("#00AFBB", "#E7B800"), pch = 15, cex = 0.8)
+
+
+p1 <- ggplot(df1, aes(days_left, price)) +
+    geom_point() +
+    ggtitle("Days Left V/S Price for Business Class") +
+    xlab("Number of Days Left") + ylab("Price")
+p2 <- ggplot(df2, aes(days_left, price)) +
+    geom_point() +
+    ggtitle("Days Left V/S Price for Economy Class") +
+    xlab("Number of Days Left") + ylab("Price")
+grid.arrange(p1, p2) 
+
+
+ggviolin(df1, x = "airline", y = "price", fill = "airline",palette = c("#00AFBB", "#E7B800", "#FC4E07", "#eb8060","#d9b1f0", "#b9e38d"), title = "Airline v/s Price for Business Class", xlab = "Airline", ylab = "Price") #Violin plot for price v/s airline for Business Class
+ggviolin(df2, x = "airline", y = "price", fill = "airline",palette = c("#00AFBB", "#E7B800", "#FC4E07", "#eb8060","#d9b1f0", "#b9e38d"), title = "Airline v/s Price for Economy Class", xlab = "Airline", ylab = "Price") #Violin Plot for price v/s airline for Economy Class
+```
+
+```{r}
+#checking for multicollinearity between various Explanatory Variables
+cramersV(df$source_city, df$destination_city) # perfectly multicollinear therefore we excluded destination_city from the data for model fit
+cramersV(df$arrival_time, df$departure_time)
+cramersV(df$airline, df$class)
+cor(df$stops, df$duration, method = "pearson")
+
+df = subset(df, select = -c(destination_city))
+```
+
+## VARIABLE SELECTION 
+
+```{r}
+# Fit the empty model, intercept only 
+model.empty <- lm(price ~ 1, data = df)
+# full model 
+full.model <- lm(price~ .,data = df)
+# FORWARD REGRESSION MODEL
+forward_model <- step(model.empty, direction = "forward", scope = formula(full.model))
+summary(forward_model)
+names(forward_model)
+```
+
+## Likelihood Ratio Test for Variable Selection
+```{r}
+set.seed(240900)
+dfs <- df[sample(nrow(df),size=1000),] #For Likelihood Ratio Test we do simple random sampling of size=500 observations since  even non-significant differences show significant due to large sample size
+
+model1 <- lm(price ~  -1 + airline + class + stops + days_left + arrival_time + departure_time + duration + source_city, data = dfs)
+summary(model1)
+
+model2 <- lm(price ~ -1 + airline + class + stops + days_left + arrival_time + departure_time + duration, data = dfs)
+summary(model2)
+
+model3 <- lm(price ~ -1 + airline + class + stops + days_left + arrival_time + departure_time, data = dfs )
+
+model4 <- lm(price ~ -1 + airline + class + stops + days_left + arrival_time, data = dfs)
+
+model5 <- lm(price ~ -1 + airline + class + stops + days_left, data = dfs)
+
+lrtest(model1, model2) #likelihood ratio test for model 1 and model 2 
+lrtest(model1, model3) #likelihood ratio test for model 1 and model 3
+lrtest(model1,model4) #likelihood ratio test for model 1 and model 4
+lrtest(model3, model4) #likelihood ratio test for model 3 and model 4
+
+#According to the above provided likelihood ratio tests model 3 should be used
+```
+
+## Final Model for MLR 
+```{r}
+final_model <- lm(price ~ -1 + airline + stops + class + days_left + arrival_time + departure_time, data = df)
+summary(final_model)
+
+par(mfrow = c(2,2))
+plot(final_model)
+```
+
+
+## Fitting a Log-Linear Model
+
+```{r}
+loglinear_model <- lm(log(price) ~ -1 + airline + class + stops + days_left + arrival_time + departure_time, data = df )
+summary(loglinear_model)
+
+par(mfrow = c(2,2))
+plot(loglinear_model)
+```
+
+## Multiple Comparison 
+
+```{r}
+#Multiple Comparison for different Airlines
+results <- aov(df$price ~ df$airline, data = df)
+tapply(df$price , df$airline, mean)
+anova(results)
+TukeyHSD(results, conf.level = 0.95) 
+
+#Multiple Comprison for different departure times
+results1 <- aov(df$price ~ df$departure_time, data = df)
+tapply(df$price , df$departure_time, mean)
+anova(results1)
+TukeyHSD(results1, conf.level = 0.95)
+
+#Mutliple Comparison for different arrival time
+results2 <- aov(df$price ~ df$arrival_time, data = df)
+tapply(df$price , df$arrival_time, mean)
+anova(results2)
+TukeyHSD(results2, conf.level = 0.95)
+```
+
+#
+
+
+
+
+
+```
